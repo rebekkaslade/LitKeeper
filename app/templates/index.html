@@ -151,40 +151,80 @@
             submitBtn.disabled = true;
             
             try {
+                // Use background job API to avoid long blocking requests
                 const formData = new FormData(form);
-                const response = await fetch('/', {
+                formData.append('wait', 'false');
+
+                const response = await fetch('/api/download', {
                     method: 'POST',
                     body: formData
                 });
-                
+
                 const data = await response.json();
 
                 result.style.display = 'block';
-                if (data.success === "true") {
+                result.innerHTML = '';
+
+                if (data.success === 'true' && data.job_id) {
                     result.classList.add('success');
 
-                    // Mostrar mensaje y añadir enlace de descarga si existe saved_as
-                    const contentHtml = document.createElement('div');
-                    const msgSpan = document.createElement('span');
-                    msgSpan.textContent = data.message || 'Download ready';
-                    contentHtml.appendChild(msgSpan);
+                    const statusSpan = document.createElement('span');
+                    statusSpan.textContent = 'Request accepted — waiting for completion...';
+                    result.appendChild(statusSpan);
 
-                    if (data.saved_as) {
-                        const filename = encodeURIComponent(data.saved_as);
-                        const downloadUrl = `/download/${filename}`;
-                        const a = document.createElement('a');
-                        a.href = downloadUrl;
-                        a.textContent = ' — Descargar archivo';
-                        a.className = 'download-link';
-                        a.target = '_blank';
-                        a.rel = 'noopener noreferrer';
-                        a.style.marginLeft = '8px';
-                        a.setAttribute('download', data.saved_as);
-                        contentHtml.appendChild(a);
-                    }
+                    // Poll job status
+                    const jobId = data.job_id;
+                    const pollInterval = 3000;
+                    const poll = async () => {
+                        try {
+                            const r = await fetch(`/job/${encodeURIComponent(jobId)}/status`);
+                            if (!r.ok) {
+                                const err = await r.json().catch(() => ({}));
+                                statusSpan.textContent = err.message || 'Job not found';
+                                result.classList.remove('success');
+                                result.classList.add('error');
+                                return;
+                            }
+                            const s = await r.json();
+                            const st = s.status || 'unknown';
+                            if (st === 'pending' || st === 'processing' || st === 'creating') {
+                                statusSpan.textContent = `Status: ${st}...`;
+                                setTimeout(poll, pollInterval);
+                                return;
+                            }
+                            if (st === 'done') {
+                                statusSpan.textContent = 'Completed — preparing download link.';
+                                const filename = s.saved_as;
+                                if (filename) {
+                                    const a = document.createElement('a');
+                                    a.href = `/download/${encodeURIComponent(filename)}`;
+                                    a.textContent = ' Descargar archivo';
+                                    a.className = 'download-link';
+                                    a.target = '_blank';
+                                    a.rel = 'noopener noreferrer';
+                                    a.style.marginLeft = '8px';
+                                    a.setAttribute('download', filename);
+                                    result.appendChild(a);
+                                }
+                                return;
+                            }
+                            // failed or unknown
+                            statusSpan.textContent = `Status: ${st}`;
+                            if (s.error) {
+                                const errP = document.createElement('div');
+                                errP.textContent = s.error;
+                                errP.style.marginTop = '8px';
+                                result.appendChild(errP);
+                            }
+                        } catch (err) {
+                            statusSpan.textContent = 'Error checking job status';
+                            result.classList.remove('success');
+                            result.classList.add('error');
+                        }
+                    };
 
-                    result.innerHTML = '';
-                    result.appendChild(contentHtml);
+                    // Start polling
+                    setTimeout(poll, pollInterval);
 
                 } else {
                     result.classList.add('error');

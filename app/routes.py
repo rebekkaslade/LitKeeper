@@ -5,6 +5,35 @@ from datetime import datetime
 import traceback
 import urllib.parse
 from threading import Thread
+import uuid
+import json
+
+# Directory to store job status files
+JOBS_DIR = os.path.join(os.path.dirname(__file__), "data", "jobs")
+
+def ensure_jobs_dir():
+    try:
+        os.makedirs(JOBS_DIR, exist_ok=True)
+    except Exception:
+        log_action(f"Failed to create jobs dir: {JOBS_DIR}")
+
+def write_job(jobid, payload):
+    ensure_jobs_dir()
+    path = os.path.join(JOBS_DIR, f"{jobid}.json")
+    with open(path, 'w') as f:
+        json.dump(payload, f)
+
+def read_job(jobid):
+    path = os.path.join(JOBS_DIR, f"{jobid}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r') as f:
+        return json.load(f)
+
+def update_job(jobid, **kwargs):
+    data = read_job(jobid) or {}
+    data.update(kwargs)
+    write_job(jobid, data)
 
 # Blueprint for module routing
 main = Blueprint('main', __name__)
@@ -41,6 +70,51 @@ def background_process_url(app, url):
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
         log_error(error_msg, url)
         log_action(f"Error occurred: {str(e)}")
+        send_notification(f"Error processing story: {str(e)}", is_error=True)
+
+
+def background_process_job(app, url, jobid):
+    """Background worker that updates job status file as it progresses."""
+    try:
+        with app.app_context():
+            update_job(jobid, status='processing', started_at=datetime.utcnow().isoformat())
+            log_action(f"[job:{jobid}] Starting story download")
+            story_content, story_title, story_author, story_category, story_tags = download_story(url)
+            if not story_content:
+                error_msg = f"Failed to download the story from the given URL: {url}"
+                log_error(error_msg, url)
+                update_job(jobid, status='failed', error=error_msg, finished_at=datetime.utcnow().isoformat())
+                send_notification(f"Story download failed: {url}", is_error=True)
+                return
+
+            log_action(f"[job:{jobid}] Successfully downloaded story: '{story_title}' by {story_author}")
+            update_job(jobid, status='creating', title=story_title, author=story_author)
+
+            epub_file_name = create_epub_file(
+                story_title,
+                story_author,
+                story_content,
+                os.path.join(os.path.dirname(__file__), "data", "epubs"),
+                story_category=story_category,
+                story_tags=story_tags
+            )
+
+            if epub_file_name and os.path.exists(epub_file_name):
+                base_filename = os.path.basename(epub_file_name)
+                update_job(jobid, status='done', saved_as=base_filename, finished_at=datetime.utcnow().isoformat())
+                log_action(f"[job:{jobid}] Successfully created EPUB file: {epub_file_name}")
+                send_notification(f"Story downloaded successfully: '{story_title}' by {story_author}")
+            else:
+                error_msg = f"Failed to create EPUB for job {jobid}"
+                update_job(jobid, status='failed', error=error_msg, finished_at=datetime.utcnow().isoformat())
+                log_error(error_msg, url)
+                send_notification(f"EPUB creation failed for job {jobid}", is_error=True)
+
+    except Exception as e:
+        error_msg = f"{str(e)}\n{traceback.format_exc()}"
+        log_error(error_msg, url)
+        update_job(jobid, status='failed', error=error_msg, finished_at=datetime.utcnow().isoformat())
+        log_action(f"[job:{jobid}] Error occurred: {str(e)}")
         send_notification(f"Error processing story: {str(e)}", is_error=True)
 
 @main.route("/api/download", methods=['GET', 'POST'])
@@ -97,14 +171,26 @@ def api_download():
         }), 400
 
     if not wait:
+        # Create a job id and store initial job state
+        jobid = uuid.uuid4().hex
+        created_at = datetime.utcnow().isoformat()
+        job_payload = {
+            "job_id": jobid,
+            "status": "pending",
+            "url": url,
+            "created_at": created_at
+        }
+        write_job(jobid, job_payload)
+
         # Get the current app context
         app = current_app._get_current_object()
-        # Start processing in background thread
-        thread = Thread(target=background_process_url, args=(app, url))
+        # Start processing in background thread (job-aware)
+        thread = Thread(target=background_process_job, args=(app, url, jobid))
         thread.start()
         return jsonify({
             "success": "true",
-            "message": "Request accepted, processing in background"
+            "message": "Request accepted, processing in background",
+            "job_id": jobid
         })
 
     return process_url(url)
@@ -179,3 +265,26 @@ def download_file(filename):
     output_directory = os.path.join(os.path.dirname(__file__), "data", "epubs")
     log_action(f"Download requested for file: {filename}")
     return send_from_directory(output_directory, filename, as_attachment=True)
+
+
+@main.route('/job/<jobid>/status', methods=['GET'])
+def job_status(jobid):
+    job = read_job(jobid)
+    if not job:
+        return jsonify({"success": "false", "message": "Job not found"}), 404
+    return jsonify(job)
+
+
+@main.route('/job/<jobid>/result', methods=['GET'])
+def job_result(jobid):
+    job = read_job(jobid)
+    if not job:
+        return jsonify({"success": "false", "message": "Job not found"}), 404
+    if job.get('status') != 'done':
+        return jsonify({"success": "false", "message": "Job not completed", "status": job.get('status')}), 400
+    # Return download URL for client convenience
+    filename = job.get('saved_as')
+    if not filename:
+        return jsonify({"success": "false", "message": "No output file recorded"}), 500
+    download_url = f"/download/{urllib.parse.quote(filename)}"
+    return jsonify({"success": "true", "download_url": download_url, "saved_as": filename})
