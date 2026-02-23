@@ -158,14 +158,37 @@
                 });
                 
                 const data = await response.json();
-                
+
                 result.style.display = 'block';
                 if (data.success === "true") {
                     result.classList.add('success');
-                    result.textContent = data.message;
+
+                    // Mostrar mensaje y añadir enlace de descarga si existe saved_as
+                    const contentHtml = document.createElement('div');
+                    const msgSpan = document.createElement('span');
+                    msgSpan.textContent = data.message || 'Download ready';
+                    contentHtml.appendChild(msgSpan);
+
+                    if (data.saved_as) {
+                        const filename = encodeURIComponent(data.saved_as);
+                        const downloadUrl = `/download/${filename}`;
+                        const a = document.createElement('a');
+                        a.href = downloadUrl;
+                        a.textContent = ' — Descargar archivo';
+                        a.className = 'download-link';
+                        a.target = '_blank';
+                        a.rel = 'noopener noreferrer';
+                        a.style.marginLeft = '8px';
+                        a.setAttribute('download', data.saved_as);
+                        contentHtml.appendChild(a);
+                    }
+
+                    result.innerHTML = '';
+                    result.appendChild(contentHtml);
+
                 } else {
                     result.classList.add('error');
-                    result.textContent = data.message;
+                    result.textContent = data.message || 'An error occurred';
                 }
             } catch (error) {
                 result.style.display = 'block';

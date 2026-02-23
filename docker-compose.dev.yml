@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: litkeeper:dev
+    volumes:
+      - .:/litkeeper:delegated
+      - ./epubs:/litkeeper/app/data/epubs
+      - ./logs:/litkeeper/app/data/logs
+    working_dir: /litkeeper
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      # Optional logging controls
+      - ENABLE_ACTION_LOG=true    # Set to false to disable action logging
+      - ENABLE_ERROR_LOG=true     # Set to false to disable error logging
+      - ENABLE_URL_LOG=true       # Set to false to disable URL logging
+    command: python run.py
+    ports:
+      - "5015:5015"
+    # Use a simple healthcheck (optional)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5015/" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
