@@ -1,5 +1,5 @@
 # Build stage
-FROM python:3.9-slim as builder
+FROM python:3.9-slim-bookworm as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 # Final stage
-FROM python:3.9-slim
+FROM python:3.9-slim-bookworm
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -29,8 +29,16 @@ RUN apt-get update && apt-get install -y \
     libfreetype6 \
     libharfbuzz0b \
     libfribidi0 \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi8 \
+    shared-mime-info \
     libpng16-16 \
     libjpeg62-turbo \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up application directory

@@ -1,5 +1,5 @@
 from flask import Blueprint, request, render_template, send_from_directory, jsonify, abort, current_app
-from .utils import download_story, create_epub_file, log_error, log_action, log_url, send_notification
+from .utils import download_story, create_epub_file, create_pdf_file, log_error, log_action, log_url, send_notification
 import os
 from datetime import datetime
 import traceback
@@ -73,7 +73,7 @@ def background_process_url(app, url):
         send_notification(f"Error processing story: {str(e)}", is_error=True)
 
 
-def background_process_job(app, url, jobid):
+def background_process_job(app, url, jobid, fmt='epub'):
     """Background worker that updates job status file as it progresses."""
     try:
         with app.app_context():
@@ -90,25 +90,36 @@ def background_process_job(app, url, jobid):
             log_action(f"[job:{jobid}] Successfully downloaded story: '{story_title}' by {story_author}")
             update_job(jobid, status='creating', title=story_title, author=story_author)
 
-            epub_file_name = create_epub_file(
-                story_title,
-                story_author,
-                story_content,
-                os.path.join(os.path.dirname(__file__), "data", "epubs"),
-                story_category=story_category,
-                story_tags=story_tags
-            )
+            # Create file according to requested format
+            if fmt and fmt.lower() == 'pdf':
+                output_path = create_pdf_file(
+                    story_title,
+                    story_author,
+                    story_content,
+                    os.path.join(os.path.dirname(__file__), "data", "epubs"),
+                    story_category=story_category,
+                    story_tags=story_tags
+                )
+            else:
+                output_path = create_epub_file(
+                    story_title,
+                    story_author,
+                    story_content,
+                    os.path.join(os.path.dirname(__file__), "data", "epubs"),
+                    story_category=story_category,
+                    story_tags=story_tags
+                )
 
-            if epub_file_name and os.path.exists(epub_file_name):
-                base_filename = os.path.basename(epub_file_name)
+            if output_path and os.path.exists(output_path):
+                base_filename = os.path.basename(output_path)
                 update_job(jobid, status='done', saved_as=base_filename, finished_at=datetime.utcnow().isoformat())
-                log_action(f"[job:{jobid}] Successfully created EPUB file: {epub_file_name}")
+                log_action(f"[job:{jobid}] Successfully created output file: {output_path}")
                 send_notification(f"Story downloaded successfully: '{story_title}' by {story_author}")
             else:
-                error_msg = f"Failed to create EPUB for job {jobid}"
+                error_msg = f"Failed to create output for job {jobid}"
                 update_job(jobid, status='failed', error=error_msg, finished_at=datetime.utcnow().isoformat())
                 log_error(error_msg, url)
-                send_notification(f"EPUB creation failed for job {jobid}", is_error=True)
+                send_notification(f"Output creation failed for job {jobid}", is_error=True)
 
     except Exception as e:
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
@@ -132,16 +143,19 @@ def api_download():
             data = request.get_json()
             url = data.get('url')
             wait = data.get('wait', True)
+            fmt = data.get('format', 'epub')
             if isinstance(wait, str):
                 wait = wait.lower() == 'true'
         else:
             log_action(f"POST Form Data: {dict(request.form)}")
             url = request.form.get('url')
             wait = request.form.get('wait', 'true').lower() == 'true'
+            fmt = request.form.get('format', 'epub')
     else:  # GET
         log_action(f"GET Query Parameters: {dict(request.args)}")
         url = request.args.get('url')
         wait = request.args.get('wait', 'true').lower() == 'true'
+        fmt = request.args.get('format', 'epub')
 
     if not url:
         error_msg = "API request received without URL parameter"
@@ -185,7 +199,7 @@ def api_download():
         # Get the current app context
         app = current_app._get_current_object()
         # Start processing in background thread (job-aware)
-        thread = Thread(target=background_process_job, args=(app, url, jobid))
+        thread = Thread(target=background_process_job, args=(app, url, jobid, fmt))
         thread.start()
         return jsonify({
             "success": "true",
@@ -193,9 +207,9 @@ def api_download():
             "job_id": jobid
         })
 
-    return process_url(url)
+    return process_url(url, fmt)
 
-def process_url(url):
+def process_url(url, fmt='epub'):
     """Process the URL and create EPUB file."""
     try:
         # Download the story and generate the EPUB
@@ -214,19 +228,29 @@ def process_url(url):
         log_action(f"Successfully downloaded story: '{story_title}' by {story_author}")
         log_action("Starting EPUB creation")
 
-        epub_file_name = create_epub_file(
-            story_title, 
-            story_author, 
-            story_content, 
-            os.path.join(os.path.dirname(__file__), "data", "epubs"),
-            story_category=story_category,
-            story_tags=story_tags
-        )
-        log_action(f"Successfully created EPUB file: {epub_file_name}")
+        if fmt and fmt.lower() == 'pdf':
+            output_file = create_pdf_file(
+                story_title,
+                story_author,
+                story_content,
+                os.path.join(os.path.dirname(__file__), "data", "epubs"),
+                story_category=story_category,
+                story_tags=story_tags
+            )
+        else:
+            output_file = create_epub_file(
+                story_title,
+                story_author,
+                story_content,
+                os.path.join(os.path.dirname(__file__), "data", "epubs"),
+                story_category=story_category,
+                story_tags=story_tags
+            )
+        log_action(f"Successfully created output file: {output_file}")
         send_notification(f"Story downloaded successfully: '{story_title}' by {story_author}")
 
         # Get the base filename without path
-        base_filename = os.path.basename(epub_file_name)
+        base_filename = os.path.basename(output_file)
 
         return jsonify({
             "success": "true",
@@ -249,7 +273,8 @@ def process_url(url):
 def index():
     if request.method == "POST":
         url = request.form.get("url")
-        return process_url(url)
+        fmt = request.form.get('format', 'epub')
+        return process_url(url, fmt)
 
     log_action("Serving index page")
     return render_template("index.html")

@@ -127,6 +127,11 @@
         <form id="downloadForm">
             <label for="url">Enter Story URL:</label>
             <input type="url" id="url" name="url" placeholder="Enter URL" required>
+            <label for="format">Output format:</label>
+            <select id="format" name="format">
+                <option value="epub" selected>EPUB</option>
+                <option value="pdf">PDF</option>
+            </select>
             <button type="submit" id="submitBtn">Download Story</button>
         </form>
         <div class="loading">
@@ -193,12 +198,14 @@
                                 return;
                             }
                             if (st === 'done') {
-                                statusSpan.textContent = 'Completed — preparing download link.';
+                                const title = s.title || '';
+                                const author = s.author || '';
+                                statusSpan.textContent = title ? `Downloaded "${title}" by ${author} — ready to download.` : 'Completed — ready to download.';
                                 const filename = s.saved_as;
                                 if (filename) {
                                     const a = document.createElement('a');
                                     a.href = `/download/${encodeURIComponent(filename)}`;
-                                    a.textContent = ' Descargar archivo';
+                                    a.textContent = ' Download';
                                     a.className = 'download-link';
                                     a.target = '_blank';
                                     a.rel = 'noopener noreferrer';

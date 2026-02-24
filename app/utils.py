@@ -570,11 +570,93 @@ def create_epub_file(story_title, story_author, story_content, output_directory,
         send_notification(f"EPUB created: {story_title} by {story_author}")
         
         return epub_path
-
     except Exception as e:
         error_msg = f"Error creating EPUB file for '{story_title}' by {story_author}: {str(e)}\n{traceback.format_exc()}"
         log_error(error_msg)
         send_notification(f"EPUB creation failed: {story_title} by {story_author}", is_error=True)
+        raise
+
+
+def create_pdf_file(story_title, story_author, story_content, output_directory, cover_image_path=None, story_category=None, story_tags=None, page_size='A4'):
+    """Create a PDF file from the story content using WeasyPrint."""
+    try:
+        from weasyprint import HTML, CSS
+        from pathlib import Path
+    except Exception as e:
+        error_msg = f"WeasyPrint not available: {e}"
+        log_error(error_msg)
+        raise
+
+    try:
+        os.makedirs(output_directory, exist_ok=True)
+
+        css = f"""
+        @page {{ size: {page_size}; margin: 1in; }}
+        body {{ font-family: 'DejaVu Sans', sans-serif; color: #222; line-height: 1.5; }}
+        .cover {{ text-align: center; margin-top: 2em; margin-bottom: 2em; }}
+        .cover img {{ max-width: 60%; height: auto; border-radius: 4px; }}
+        h1.title {{ text-align: center; margin-top: 0.5em; font-size: 28px; }}
+        h2.author {{ text-align: center; font-size: 18px; color: #555; margin-top: 0.2em; }}
+        h3.chapter {{ page-break-before: always; font-size: 20px; margin-top: 1.2em; }}
+        p {{ margin: 0.8em 0; font-size: 12.5px; }}
+        """
+
+        html_parts = ['<!doctype html><html><head><meta charset="utf-8"></head><body>']
+
+        # Cover
+        if cover_image_path and os.path.exists(cover_image_path):
+            cover_uri = Path(cover_image_path).absolute().as_uri()
+            html_parts.append(f'<div class="cover"><img src="{cover_uri}" alt="cover"/></div>')
+
+        html_parts.append(f'<h1 class="title">{story_title}</h1>')
+        html_parts.append(f'<h2 class="author">by {story_author}</h2>')
+
+        if story_category or story_tags:
+            meta_html = '<div class="metadata">'
+            if story_category:
+                meta_html += f'<p><strong>Category:</strong> {story_category}</p>'
+            if story_tags:
+                meta_html += f'<p><strong>Tags:</strong> {", ".join(story_tags)}</p>'
+            meta_html += '</div>'
+            html_parts.append(meta_html)
+
+        chapter_texts = story_content.split("\n\nChapter ")
+        if chapter_texts[0].strip():
+            intro = chapter_texts[0].strip()
+            for p in intro.split('\n\n'):
+                html_parts.append(f'<p>{p.strip()}</p>')
+
+        for i, chapter_text in enumerate(chapter_texts[1:], 1):
+            title_end = chapter_text.find("\n\n")
+            if title_end == -1:
+                chapter_title = f"Chapter {i}"
+                chapter_body = chapter_text
+            else:
+                chapter_title = f"Chapter {chapter_text[:title_end]}"
+                chapter_body = chapter_text[title_end:].strip()
+
+            html_parts.append(f'<h3 class="chapter">{chapter_title}</h3>')
+            for p in chapter_body.split('\n\n'):
+                if p.strip():
+                    html_parts.append(f'<p>{p.strip()}</p>')
+
+        html_parts.append('</body></html>')
+        full_html = '\n'.join(html_parts)
+
+        def sanitize_filename(filename):
+            return re.sub(r'[^a-zA-Z0-9._-]', '', filename)
+
+        output_path = os.path.join(output_directory, f"{sanitize_filename(story_title)}.pdf")
+
+        HTML(string=full_html).write_pdf(output_path, stylesheets=[CSS(string=css)])
+        log_action(f"Successfully wrote PDF file to: {output_path}")
+        send_notification(f"PDF created: {story_title} by {story_author}")
+        return output_path
+
+    except Exception as e:
+        error_msg = f"Error creating PDF for '{story_title}': {str(e)}\n{traceback.format_exc()}"
+        log_error(error_msg)
+        send_notification(f"PDF creation failed: {story_title}", is_error=True)
         raise
 
 # Example usage:
